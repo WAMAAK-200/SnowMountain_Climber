@@ -1,7 +1,54 @@
 import pygame
 import random
-import os
 
+
+
+# =========================
+# ASSET LOADING
+# =========================
+def load_sprite(path, scale=None):
+    # handles sprite loading
+    try:
+        sprite = pygame.image.load(path).convert_alpha()
+        if scale:
+            sprite = pygame.transform.scale(sprite, scale)
+        return sprite
+    except:
+        # Fallback colored rectangle if sprite not found
+        print(f"Warning: Could not load {path}")
+        surface = pygame.Surface((32, 48))
+        surface.fill((255, 100, 100))
+        return surface
+
+try:
+    # Player sprite
+    playersp = load_sprite("player.png", (32, 48))
+
+    # Background
+    background = load_sprite("background.png", (800, 600))
+    
+    # Hazard sprites
+    icicle_sprite = load_sprite("icicle.png", (20, 40))
+    avalanche_sprite = load_sprite("avalanche.png", (800, 100))
+    
+    # Platform sprites
+    #ice_platform = load_sprite("ice_platform.png", (100, 20))
+    #rock_platform = load_sprite("rock_platform.png", (100, 20))
+    
+except:
+    # Fallback colors if sprites not found
+    playersp = pygame.Surface((32, 48))
+
+    
+    background = pygame.Surface((800, 600))
+    background.fill((135, 206, 235))  # Sky blue
+    
+    icicle_sprite = pygame.Surface((20, 40))
+    icicle_sprite.fill((200, 230, 255))
+
+    avalanche_sprite = pygame.Surface((800, 100))
+    avalanche_sprite.fill((255, 255, 255))
+    
 
 
 # =========================
@@ -22,7 +69,7 @@ class Player:
     # animation states (climbing, walking, slipping)
     # sprite management
 
-    def __init__(self):
+    def __init__(self,playersp):
         # Physics
         self.position = pygame.math.Vector2(100, 540)
         self.velocity = pygame.math.Vector2(0, 0)
@@ -35,13 +82,29 @@ class Player:
         self.is_grounded = False
         self.is_climbing = False
         self.is_sliding = False
+        self.move_speed = 400
 
-        # Simple visual placeholder so the game can draw something
-        self.image = pygame.Surface((32, 48))
-        self.image.fill((200, 240, 255))
-        self.rect = self.image.get_rect(topleft=self.position)
+        self.sprite = playersp
+
+        self.rect = playersp.get_rect(topleft=self.position)
 
 
+        # Health
+
+        self.health = 100
+        self.invinc_timer = 0
+        self.invinc_dur = 0.5
+
+    def damage(self, amount):
+        if self.invinc_timer <= 0:
+            self.health -= amount
+            self.invinc_timer = self.invinc_dur
+            return True
+        return False
+    
+    def update(self, dt):
+        if self.invinc_timer > 0:
+            self.invinc_timer -= dt
 # =========================
 # GRAVITY SYSTEM
 # =========================
@@ -188,40 +251,137 @@ class Platform:
         # Draw the platform
         pygame.draw.rect(screen, self.color, self.rect)
 
-# likely will be scrapped
-class ClimbingSurface:
-    # Vertical surfaces you can climb
-    # holds/piton_points
-    # difficulty_rating
-    # breakable (ice vs rock)
-    pass
-
 
 class Hazard:
     # Falling icicles, avalanches, crevasses
     # activation_zone
     # damage_value
     
-    def __init__(self,x,y,width,height, obst_type):
-        self.obst = pygame.Rect(x,y,width,height)
+    def __init__(self,x,y,obst_type="icicle"):
         self.obst_type = obst_type
         self.damage = 0
-
-        if self.obst_type == "icicle":
-            self.damage = 2
-        elif self.obst_type == "avalanche":
-            self.damage = 7
-        else:
-            self.damage = 1
+        self.active = True
         
-        def spawn_haz(self):
-            rng = random.randint(1,50)
-            if obst_type != "avalanche":
-                pygame.draw.rect(self.obst)
+        if self.obst_type == "icicle":
+            self.damage = 10
+            self.sprite = icicle_sprite
+            self.fallsp = random.randint(300,500)
+            self.rect = pygame.Rect(x, y, 20, 40)  # Add rect for collision
+        elif self.obst_type == "avalanche":
+            self.damage = 999
+            self.sprite = avalanche_sprite
+            self.fallsp = 200
+            self.rect = pygame.Rect(x, y, 800, 100)  # Full width avalanche
+        else:
+            self.damage = 15
+            self.sprite = icicle_sprite  # Fallback
+            self.fallsp = random.randint(300,500)
+            self.rect = pygame.Rect(x, y, 30, 30)
+    
+    def update(self, dt):
+        # Update hazard position
+        if self.obst_type in ["icicle", "rock"] and self.active:
+            self.rect.y += self.fallsp * dt
+            
+            # Deactivate if off screen
+            if self.rect.top > 600:
+                self.active = False
+                
+        elif self.obst_type == "avalanche" and self.active:
+            self.rect.y += self.fallsp * dt
+    
+    def draw(self, screen):
+        if self.active:
+            screen.blit(self.sprite, self.rect)
 
 
+class HazardManager:
+    # Manages spawning and updating hazards
+    # Handles avalanche timer and warnings
+    
+    def __init__(self):
+        self.hazards = []
+        self.spawn_timer = 0
+        self.spawn_interval = 2.0  # seconds between spawns
+        self.avalanche_timer = 60.0  # 60 seconds until avalanche
+        self.avalanche_active = False
+        self.avalanche_warning = False
+        self.warning_flash = 0
+    
+    def update(self, dt, player_x):
+        # Update spawn timer
+        self.spawn_timer += dt
+        
+        # Spawn random hazards if timer reached
+        if self.spawn_timer >= self.spawn_interval and not self.avalanche_active:
+            self.spawn_timer = 0
+            self.spawn_hazard(player_x)
+        
+        # Update avalanche timer
+        self.avalanche_timer -= dt
+        
+        # Check for avalanche warning
+        if not self.avalanche_warning and self.avalanche_timer <= 10:
+            self.avalanche_warning = True
+        
+        # Activate avalanche if timer reaches 0
+        if self.avalanche_timer <= 0 and not self.avalanche_active:
+            self.act_avalanche()
+        
+        # Update all hazards
+        for hazard in self.hazards[:]:  # Copy list for safe removal
+            hazard.update(dt)
+            if not hazard.active:
+                self.hazards.remove(hazard)
 
+    def spawn_hazard(self, player_x):
+        """Spawn a random hazard above the player"""
+        hazard_type = random.choice(["icicle", "rock"])
+        spawn_x = player_x + random.randint(-100, 100)
+        spawn_x = max(0, min(spawn_x, 780))  # Keep on screen
+        
+        new_hazard = Hazard(spawn_x, -50, hazard_type)
+        self.hazards.append(new_hazard)
 
+    def act_avalanche(self):
+        """Time's up! Time for the avalanche to kill you!"""
+        if not self.avalanche_active:
+            self.avalanche_active = True
+            avalanche = Hazard(0, -100, "avalanche")
+            avalanche.active = True
+            self.hazards.append(avalanche)
+            print("Tick Tock, an avalanche is coming")
+
+    def check_collisions(self, player):
+        """Check collisions between player and all hazards"""
+        for hazard in self.hazards:
+            if hazard.active and player.rect.colliderect(hazard.rect):
+                # Damage player if not invincible
+                if player.damage(hazard.damage):
+                    print(f"Hit by {hazard.obst_type}! Health: {player.health}")
+                    
+                    # Remove small hazards on hit
+                    if hazard.obst_type in ["icicle", "rock"]:
+                        hazard.active = False
+                
+                # Avalanche is instant death
+                if hazard.obst_type == "avalanche":
+                    return True
+        
+        return False
+
+    def draw(self, screen):
+        """Draw all hazards"""
+        for hazard in self.hazards:
+            hazard.draw(screen)
+        
+        # Draw avalanche warning
+        if self.avalanche_warning and not self.avalanche_active:
+            # Flashing warning
+            if int(pygame.time.get_ticks() / 500) % 2 == 0:
+                font = pygame.font.Font(None, 48)
+                warning = font.render(f"AVALANCHE IN {int(self.avalanche_timer)}s!", True, (255, 50, 50))
+                screen.blit(warning, (200, 50))
 
 class WeatherSystem:
     # wind_force/direction
@@ -243,15 +403,12 @@ class WeatherSystem:
 # FUNCTIONS
 # ==========
 
-# might be scrapped
-def handle_climbing(player, climbable_surface):
-    # Check for holds, stamina drain, upward movement
-    pass
+
 
 
 def ice_physics(player, platform):
     # Reduced friction, sliding mechanics
-    pass
+    player.velocity.x *= 0.95
 
 def check_base_collisions(player, terrain):
     # baseplate collisions (feet, head, sides)
@@ -316,6 +473,41 @@ def camera_follow(player, screen_width):
     
     return camera_x
 
+def draw_health_bar(screen, player):
+    # Draw player health bar
+    bar_width = 200
+    bar_height = 20
+    bar_x = 10
+    bar_y = 10
+    
+    # Background
+    pygame.draw.rect(screen, (50, 50, 50), (bar_x, bar_y, bar_width, bar_height))
+    
+    # Health fill
+    health_width = (player.health / player.max_health) * bar_width
+    health_color = (0, 255, 0) if player.health > 50 else (255, 255, 0) if player.health > 25 else (255, 0, 0)
+    pygame.draw.rect(screen, health_color, (bar_x, bar_y, health_width, bar_height))
+    
+    # Border
+    pygame.draw.rect(screen, (255, 255, 255), (bar_x, bar_y, bar_width, bar_height), 2)
+    
+    # Health text
+    font = pygame.font.Font(None, 24)
+    health_text = font.render(f"Health: {player.health}/{player.max_health}", True, (255, 255, 255))
+    screen.blit(health_text, (bar_x + 5, bar_y + 2))
+
+def draw_timer(screen, hazard_manager):
+    # Draw avalanche timer
+    font = pygame.font.Font(None, 36)
+    
+    if hazard_manager.avalanche_active:
+        timer_text = font.render("AVALANCHE!", True, (255, 50, 50))
+    elif hazard_manager.avalanche_warning:
+        timer_text = font.render(f"Avalanche: {int(hazard_manager.avalanche_timer)}s", True, (255, 150, 50))
+    else:
+        timer_text = font.render(f"Avalanche: {int(hazard_manager.avalanche_timer)}s", True, (255, 255, 255))
+    
+    screen.blit(timer_text, (600, 10))
 
 
 
@@ -334,13 +526,22 @@ def main():
     clock = pygame.time.Clock()
 
 
-    player = Player()
+    player = Player(playersp)
     terrain = Platform(0,580,300,300,"rock")
+    goal = Platform(350,200,100,20,"rock")
+    hazard_manager = HazardManager()
     setup_player_gravity(player)
     weather = WeatherSystem()
     weather.wind_force = 40.0  # 0 = no wind, can tweak the wind however
     plats = generate_mountain_section(surfacelist)
 
+    # Win Condition
+
+
+    game_won = False
+    game_over = False
+
+    font = pygame.font.Font(None, 36)
 
     running = True
     while running:
@@ -356,36 +557,74 @@ def main():
                 if event.key == pygame.K_SPACE:
                     jump_pressed = True
                     player.is_grounded = False
-                elif event.type == pygame.KEYDOWN and (event.key == pygame.K_d or event.key == pygame.K_RIGHT):
-                    player.position.x += 10
-                elif event.type == pygame.KEYDOWN and (event.key == pygame.K_l or event.key == pygame.K_LEFT):
-                    player.position.x -= 10
+
 
         keys = pygame.key.get_pressed()
         jump_held = keys[pygame.K_SPACE]
 
-        # collisions (my absolute worst nightmare)
-        for p in plats:
-            if player.rect.colliderect(p.rect):
-                player.position.y = p.rect.top - player.rect.height
-                player.rect.bottom = p.rect.top
-                player.is_grounded = True
-                player.velocity.y = 0  
+        # skip if game over/won
 
-        check_base_collisions(player, terrain)
+        if not (game_won or game_over):
+            moving = False
+            mv_speed = player.move_speed * dt
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                player.position.x -= mv_speed
+                moving = True
+        
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                player.position.x += mv_speed
+                moving = True
 
-        apply_gravity(player, dt, jump_pressed, jump_held, wind_x=weather.wind_force)
+            # collisions (my absolute worst nightmare)
+            for p in plats:
+                if player.rect.colliderect(p.rect):
+                    player.position.y = p.rect.top - player.rect.height
+                    player.rect.bottom = p.rect.top
+                    player.is_grounded = True
+                    player.velocity.y = 0  
+                    cur = p
 
-        # Draw! This is not C so thankfully there should be no memory leaks here
-        screen.fill((20, 30, 50))
-        screen.blit(player.image, player.rect)
+                    # check if on ice
+                    if p.surface == "ice":
+                        player.is_sliding = True
+                
+            if player.is_sliding == True:
+                ice_physics(player,cur)
 
-        terrain.draw(screen)
+            check_base_collisions(player, terrain)
 
-        for p in plats:
-            p.draw(screen)
+            apply_gravity(player, dt, jump_pressed, jump_held, wind_x=weather.wind_force)
 
-        pygame.display.flip()
+            # =====================
+            # HAZARDS
+            # =====================
+            hazard_manager.update(dt, player.position.x)
+            hazard_manager.check_collisions(player)
+            
+            # =====================
+            # WIN/LOSE CONDITIONS
+            # =====================
+            if player.rect.colliderect(goal.rect):
+                game_won = True
+            
+            if player.health <= 0 or hazard_manager.avalanche_active and player.rect.colliderect(hazard_manager.hazards[-1].rect):
+                game_over = True
+            
+            # Update player (invincibility timer)
+            player.update(dt)
+
+            # Draw! This is not C so thankfully there should be no memory leaks here
+            screen.blit(background, (0, 0))
+            screen.blit(player.sprite, player.rect)
+
+            terrain.draw(screen)
+
+            for p in plats:
+                p.draw(screen)
+
+            pygame.display.flip()
+            
+
 
     pygame.quit()
 
